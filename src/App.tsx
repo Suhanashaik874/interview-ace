@@ -10,6 +10,7 @@ import Dashboard from "./pages/Dashboard";
 import Resume from "./pages/Resume";
 import InterviewSelect from "./pages/InterviewSelect";
 import Interview from "./pages/Interview";
+import HRInterview from "./pages/HRInterview";
 import InterviewResults from "./pages/InterviewResults";
 import NotFound from "./pages/NotFound";
 
@@ -29,6 +30,7 @@ const App = () => (
             <Route path="/resume" element={<Resume />} />
             <Route path="/interview/select" element={<InterviewSelect />} />
             <Route path="/interview/:id" element={<Interview />} />
+            <Route path="/interview/hr/:id" element={<HRInterview />} />
             <Route path="/interview/results/:id" element={<InterviewResults />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
