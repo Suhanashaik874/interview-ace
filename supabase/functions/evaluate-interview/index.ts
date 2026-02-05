@@ -49,9 +49,11 @@ serve(async (req) => {
       const maxPoints = pointsForDifficulty[question.difficulty as keyof typeof pointsForDifficulty] || 20;
       maxScore += maxPoints;
 
-      // Prepare evaluation prompt
-      const evalPrompt = question.question_type === 'coding' 
-        ? `Evaluate this coding solution:
+      // Build evaluation prompt based on question type
+      let evalPrompt = '';
+      
+      if (question.question_type === 'coding') {
+        evalPrompt = `You are a senior software engineer evaluating a coding interview solution.
 
 Question: ${question.question_text}
 
@@ -62,17 +64,42 @@ ${question.user_code || 'No code submitted'}
 
 Expected Approach: ${question.expected_answer || 'Not specified'}
 
-Evaluate based on:
+Evaluate comprehensively based on:
 1. Correctness (does it solve the problem?)
 2. Code quality and readability
 3. Time/space complexity
 4. Edge case handling
+5. Best practices followed
 
 Return JSON with:
 - score: number from 0-100 (percentage)
 - is_correct: boolean
-- feedback: markdown string with what was done well, what could improve, and optimal approach explanation`
-        : `Evaluate this answer:
+- feedback: markdown string with detailed analysis of their solution
+- optimal_solution: provide the BEST optimized solution code with inline comments explaining key parts
+- time_complexity: string describing time complexity of optimal solution (e.g., "O(n)")
+- space_complexity: string describing space complexity of optimal solution (e.g., "O(1)")
+- areas_to_improve: array of 3-5 specific, actionable improvement suggestions for the candidate`;
+      } else if (question.question_type === 'hr') {
+        evalPrompt = `You are an experienced HR interviewer evaluating a behavioral interview response.
+
+Question: ${question.question_text}
+
+User's Answer: ${question.user_answer || 'No answer submitted'}
+
+Evaluate based on:
+1. Use of STAR method (Situation, Task, Action, Result)
+2. Clarity and structure of response
+3. Relevance to the question
+4. Demonstration of soft skills
+5. Professionalism and communication
+
+Return JSON with:
+- score: number from 0-100 (percentage)
+- is_correct: true if answer shows competency, false otherwise
+- feedback: markdown string with detailed feedback on their response
+- areas_to_improve: array of 3-5 specific suggestions for better answers`;
+      } else {
+        evalPrompt = `Evaluate this aptitude/reasoning answer:
 
 Question: ${question.question_text}
 ${question.options ? `Options: ${JSON.stringify(question.options)}` : ''}
@@ -83,7 +110,10 @@ Expected Answer: ${question.expected_answer || 'Not specified'}
 Return JSON with:
 - score: 100 if correct, 0 if wrong
 - is_correct: boolean  
-- feedback: brief explanation of why the answer is correct/incorrect and the right approach`;
+- feedback: detailed explanation of why the answer is correct/incorrect
+- solution_steps: step-by-step breakdown of how to solve this problem
+- areas_to_improve: array of skills or concepts to review`;
+      }
 
       evaluationPromises.push(
         fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
@@ -126,12 +156,22 @@ Return JSON with:
       
       totalScore += score;
 
+      // Store enriched feedback as JSON
+      const enrichedFeedback = evaluation ? {
+        feedback: evaluation.feedback || 'Evaluation not available',
+        optimal_solution: evaluation.optimal_solution || null,
+        time_complexity: evaluation.time_complexity || null,
+        space_complexity: evaluation.space_complexity || null,
+        solution_steps: evaluation.solution_steps || null,
+        areas_to_improve: evaluation.areas_to_improve || [],
+      } : { feedback: 'Evaluation not available' };
+
       await supabase
         .from('interview_questions')
         .update({
           is_correct: evaluation?.is_correct ?? false,
           score,
-          ai_feedback: evaluation?.feedback || 'Evaluation not available',
+          ai_feedback: JSON.stringify(enrichedFeedback),
         })
         .eq('id', question.id);
     }

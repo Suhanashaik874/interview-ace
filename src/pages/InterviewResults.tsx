@@ -10,13 +10,34 @@ import {
   Check,
   X,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Lightbulb,
+  Code,
+  Zap
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Navbar } from '@/components/layout/Navbar';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import ReactMarkdown from 'react-markdown';
+
+interface EnrichedFeedback {
+  feedback: string;
+  optimal_solution?: string;
+  time_complexity?: string;
+  space_complexity?: string;
+  solution_steps?: string;
+  areas_to_improve?: string[];
+}
+
+const parseFeedback = (feedbackStr: string | null): EnrichedFeedback => {
+  if (!feedbackStr) return { feedback: 'No feedback available' };
+  try {
+    return JSON.parse(feedbackStr);
+  } catch {
+    return { feedback: feedbackStr };
+  }
+};
 
 export default function InterviewResults() {
   const { id } = useParams<{ id: string }>();
@@ -252,14 +273,73 @@ export default function InterviewResults() {
                           </div>
                         )}
 
-                        {question.ai_feedback && (
-                          <div>
-                            <p className="text-sm font-medium mb-2">AI Feedback:</p>
-                            <div className="prose prose-invert prose-sm max-w-none p-4 rounded-lg bg-primary/5 border border-primary/20">
-                              <ReactMarkdown>{question.ai_feedback}</ReactMarkdown>
+                        {question.ai_feedback && (() => {
+                          const feedback = parseFeedback(question.ai_feedback);
+                          return (
+                            <div className="space-y-4">
+                              <div>
+                                <p className="text-sm font-medium mb-2 flex items-center gap-2">
+                                  <TrendingUp className="h-4 w-4 text-primary" />
+                                  AI Feedback
+                                </p>
+                                <div className="prose prose-invert prose-sm max-w-none p-4 rounded-lg bg-primary/5 border border-primary/20">
+                                  <ReactMarkdown>{feedback.feedback}</ReactMarkdown>
+                                </div>
+                              </div>
+
+                              {feedback.optimal_solution && (
+                                <div>
+                                  <p className="text-sm font-medium mb-2 flex items-center gap-2">
+                                    <Code className="h-4 w-4 text-success" />
+                                    Optimal Solution
+                                    {feedback.time_complexity && (
+                                      <span className="text-xs bg-success/20 text-success px-2 py-0.5 rounded">
+                                        Time: {feedback.time_complexity}
+                                      </span>
+                                    )}
+                                    {feedback.space_complexity && (
+                                      <span className="text-xs bg-accent/20 text-accent px-2 py-0.5 rounded">
+                                        Space: {feedback.space_complexity}
+                                      </span>
+                                    )}
+                                  </p>
+                                  <pre className="p-4 rounded-lg bg-success/5 border border-success/20 font-mono text-sm overflow-auto whitespace-pre-wrap">
+                                    {feedback.optimal_solution}
+                                  </pre>
+                                </div>
+                              )}
+
+                              {feedback.solution_steps && (
+                                <div>
+                                  <p className="text-sm font-medium mb-2 flex items-center gap-2">
+                                    <Zap className="h-4 w-4 text-warning" />
+                                    Solution Steps
+                                  </p>
+                                  <div className="prose prose-invert prose-sm max-w-none p-4 rounded-lg bg-warning/5 border border-warning/20">
+                                    <ReactMarkdown>{feedback.solution_steps}</ReactMarkdown>
+                                  </div>
+                                </div>
+                              )}
+
+                              {feedback.areas_to_improve && feedback.areas_to_improve.length > 0 && (
+                                <div>
+                                  <p className="text-sm font-medium mb-2 flex items-center gap-2">
+                                    <Lightbulb className="h-4 w-4 text-accent" />
+                                    Areas to Improve
+                                  </p>
+                                  <ul className="space-y-2">
+                                    {feedback.areas_to_improve.map((area, i) => (
+                                      <li key={i} className="flex items-start gap-2 text-sm p-2 rounded-lg bg-accent/5 border border-accent/20">
+                                        <span className="text-accent font-bold">{i + 1}.</span>
+                                        <span className="text-muted-foreground">{area}</span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
                             </div>
-                          </div>
-                        )}
+                          );
+                        })()}
                       </div>
                     </motion.div>
                   )}

@@ -15,11 +15,7 @@ import { Navbar } from '@/components/layout/Navbar';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import * as pdfjsLib from 'pdfjs-dist';
 import * as mammoth from 'mammoth';
-
-// Set up PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 interface ExtractedSkill {
   name: string;
@@ -141,7 +137,20 @@ export default function Resume() {
 
   const extractTextFromPDF = async (file: File): Promise<string> => {
     const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    
+    // Dynamic import of pdfjs-dist to avoid worker issues
+    const pdfjsLib = await import('pdfjs-dist');
+    
+    // Use fake worker to avoid CDN issues
+    pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+    
+    const pdf = await pdfjsLib.getDocument({ 
+      data: arrayBuffer,
+      useWorkerFetch: false,
+      isEvalSupported: false,
+      useSystemFonts: true,
+    }).promise;
+    
     let text = '';
 
     for (let i = 1; i <= pdf.numPages; i++) {
