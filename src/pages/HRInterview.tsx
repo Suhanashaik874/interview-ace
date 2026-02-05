@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { 
   Clock, 
@@ -51,6 +52,13 @@ export default function HRInterview() {
   const [isMicOn, setIsMicOn] = useState(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [isPracticeMode, setIsPracticeMode] = useState(true);
+  
+  // Update answer in questions array for persistence
+  const updateQuestionAnswer = useCallback((index: number, newAnswer: string) => {
+    setQuestions(prev => prev.map((q, i) => 
+      i === index ? { ...q, user_answer: newAnswer } : q
+    ));
+  }, []);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -79,6 +87,14 @@ export default function HRInterview() {
     };
   }, [stream]);
 
+  // Sync video stream to video element when stream or videoRef changes
+  useEffect(() => {
+    if (videoRef.current && stream && isVideoOn) {
+      videoRef.current.srcObject = stream;
+      videoRef.current.play().catch(console.error);
+    }
+  }, [stream, isVideoOn]);
+
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -94,11 +110,13 @@ export default function HRInterview() {
     } else {
       try {
         const mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: isMicOn });
-        setStream(mediaStream);
-        if (videoRef.current) {
-          videoRef.current.srcObject = mediaStream;
+        // Stop any existing stream first
+        if (stream) {
+          stream.getTracks().forEach(track => track.stop());
         }
+        setStream(mediaStream);
         setIsVideoOn(true);
+        toast.success('Camera enabled');
       } catch (error) {
         console.error('Error accessing camera:', error);
         toast.error('Could not access camera. Please check permissions.');
@@ -114,8 +132,16 @@ export default function HRInterview() {
       setIsMicOn(false);
     } else {
       try {
-        const mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: isVideoOn });
-        setStream(mediaStream);
+        // If video is already on, just enable audio track on existing stream
+        if (isVideoOn && stream) {
+          const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          audioStream.getAudioTracks().forEach(track => {
+            stream.addTrack(track);
+          });
+        } else {
+          const mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          setStream(mediaStream);
+        }
         setIsMicOn(true);
         toast.success('Microphone enabled');
       } catch (error) {
@@ -214,8 +240,11 @@ export default function HRInterview() {
   };
 
   const saveAnswer = async () => {
+    // Update local state first
+    updateQuestionAnswer(currentIndex, answer);
+    
     const currentQuestion = questions[currentIndex];
-    if (!currentQuestion?.id) return;
+    if (!currentQuestion?.id || currentQuestion.id.startsWith('temp-')) return;
 
     await supabase
       .from('interview_questions')
@@ -224,19 +253,32 @@ export default function HRInterview() {
   };
 
   const nextQuestion = async () => {
-    await saveAnswer();
+    // Save current answer to state and DB
+    updateQuestionAnswer(currentIndex, answer);
+    const currentQuestion = questions[currentIndex];
+    if (currentQuestion?.id && !currentQuestion.id.startsWith('temp-')) {
+      await supabase
+        .from('interview_questions')
+        .update({ user_answer: answer })
+        .eq('id', currentQuestion.id);
+    }
+    
     if (currentIndex < questions.length - 1) {
-      setCurrentIndex(currentIndex + 1);
-      const nextQ = questions[currentIndex + 1];
-      setAnswer(nextQ.user_answer || '');
+      const nextIdx = currentIndex + 1;
+      setCurrentIndex(nextIdx);
+      // Use setTimeout to ensure state is updated
+      setAnswer(questions[nextIdx].user_answer || '');
     }
   };
 
   const prevQuestion = () => {
+    // Save current answer to state
+    updateQuestionAnswer(currentIndex, answer);
+    
     if (currentIndex > 0) {
-      setCurrentIndex(currentIndex - 1);
-      const prevQ = questions[currentIndex - 1];
-      setAnswer(prevQ.user_answer || '');
+      const prevIdx = currentIndex - 1;
+      setCurrentIndex(prevIdx);
+      setAnswer(questions[prevIdx].user_answer || '');
     }
   };
 
@@ -497,7 +539,11 @@ export default function HRInterview() {
                 </div>
 
                 <div className="mt-4 flex justify-end">
-                  <Button onClick={saveAnswer} variant="outline">
+                  <Button onClick={() => {
+                    updateQuestionAnswer(currentIndex, answer);
+                    saveAnswer();
+                    toast.success('Answer saved');
+                  }} variant="outline">
                     <Send className="h-4 w-4 mr-2" />
                     Save Answer
                   </Button>
@@ -521,8 +567,15 @@ export default function HRInterview() {
               {questions.map((_, idx) => (
                 <button
                   key={idx}
-                  onClick={() => {
-                    saveAnswer();
+                  onClick={async () => {
+                    // Save current answer first
+                    updateQuestionAnswer(currentIndex, answer);
+                    if (questions[currentIndex]?.id && !questions[currentIndex].id?.startsWith('temp-')) {
+                      await supabase
+                        .from('interview_questions')
+                        .update({ user_answer: answer })
+                        .eq('id', questions[currentIndex].id);
+                    }
                     setCurrentIndex(idx);
                     setAnswer(questions[idx].user_answer || '');
                   }}

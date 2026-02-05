@@ -33,7 +33,16 @@ interface EnrichedFeedback {
 const parseFeedback = (feedbackStr: string | null): EnrichedFeedback => {
   if (!feedbackStr) return { feedback: 'No feedback available' };
   try {
-    return JSON.parse(feedbackStr);
+    const parsed = JSON.parse(feedbackStr);
+    // If it's a valid object with feedback property, use it
+    if (parsed && typeof parsed === 'object' && parsed.feedback) {
+      return parsed;
+    }
+    // If it's just a string in JSON, return it as feedback
+    if (typeof parsed === 'string') {
+      return { feedback: parsed };
+    }
+    return { feedback: feedbackStr };
   } catch {
     return { feedback: feedbackStr };
   }
@@ -174,11 +183,25 @@ export default function InterviewResults() {
             >
               <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
                 <TrendingUp className="h-5 w-5 text-primary" />
-                AI Feedback
+                Overall Feedback
               </h2>
               <div className="prose prose-invert max-w-none">
-                <ReactMarkdown>{interview.feedback}</ReactMarkdown>
+                <ReactMarkdown>{typeof interview.feedback === 'string' ? interview.feedback : JSON.stringify(interview.feedback)}</ReactMarkdown>
               </div>
+            </motion.div>
+          )}
+          
+          {/* Show message if no feedback available */}
+          {!interview?.feedback && interview?.status === 'completed' && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.4 }}
+              className="glass-card p-6 mb-8 max-w-3xl mx-auto text-center"
+            >
+              <p className="text-muted-foreground">
+                Feedback is being generated. Please refresh the page in a moment.
+              </p>
             </motion.div>
           )}
 
