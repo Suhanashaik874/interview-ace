@@ -136,30 +136,46 @@ export default function Resume() {
   };
 
   const extractTextFromPDF = async (file: File): Promise<string> => {
-    const arrayBuffer = await file.arrayBuffer();
-    
-    // Dynamic import of pdfjs-dist to avoid worker issues
-    const pdfjsLib = await import('pdfjs-dist');
-    
-    // Use fake worker to avoid CDN issues
-    pdfjsLib.GlobalWorkerOptions.workerSrc = '';
-    
-    const pdf = await pdfjsLib.getDocument({ 
-      data: arrayBuffer,
-      useWorkerFetch: false,
-      isEvalSupported: false,
-      useSystemFonts: true,
-    }).promise;
-    
-    let text = '';
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      
+      // Dynamic import of pdfjs-dist
+      const pdfjsLib = await import('pdfjs-dist');
+      
+      // Disable worker completely to avoid CDN/CORS issues
+      pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+      
+      const loadingTask = pdfjsLib.getDocument({ 
+        data: new Uint8Array(arrayBuffer),
+        useWorkerFetch: false,
+        isEvalSupported: false,
+        useSystemFonts: true,
+        disableFontFace: true,
+      });
+      
+      const pdf = await loadingTask.promise;
+      
+      let text = '';
 
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      text += content.items.map((item: any) => item.str).join(' ') + '\n';
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        const pageText = content.items
+          .map((item: any) => item.str)
+          .filter((str: string) => str.trim().length > 0)
+          .join(' ');
+        text += pageText + '\n';
+      }
+
+      if (!text.trim()) {
+        throw new Error('No text could be extracted from the PDF. The file may be image-based or corrupted.');
+      }
+
+      return text;
+    } catch (error) {
+      console.error('PDF extraction error:', error);
+      throw new Error('Failed to extract text from PDF. Please try a different file or use a Word document.');
     }
-
-    return text;
   };
 
   const extractTextFromWord = async (file: File): Promise<string> => {
