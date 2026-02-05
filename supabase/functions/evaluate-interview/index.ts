@@ -30,10 +30,26 @@ serve(async (req) => {
       .select('*')
       .eq('interview_id', interviewId);
 
-    if (fetchError) throw fetchError;
+     if (fetchError) {
+       console.error('Error fetching questions:', fetchError);
+       throw fetchError;
+     }
+     
     if (!questions || questions.length === 0) {
-      throw new Error('No questions found for this interview');
+       console.error('No questions found for interview:', interviewId);
+       // Return a graceful response instead of throwing
+       return new Response(
+         JSON.stringify({ 
+           totalScore: 0, 
+           maxScore: 0,
+           feedback: 'No questions were found for this interview. Please start a new interview session.',
+           error: 'no_questions'
+         }),
+         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+       );
     }
+
+     console.log(`Evaluating ${questions.length} questions for interview ${interviewId}`);
 
     let totalScore = 0;
     let maxScore = 0;

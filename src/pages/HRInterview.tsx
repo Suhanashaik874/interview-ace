@@ -155,7 +155,7 @@ export default function HRInterview() {
       }
     } catch (error) {
       console.error('Error fetching interview:', error);
-      toast.error('Failed to load interview');
+       toast.error('Failed to load interview. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -173,10 +173,15 @@ export default function HRInterview() {
         },
       });
 
-      if (error) throw error;
+       if (error) {
+         console.error('Generate questions error:', error);
+         throw error;
+       }
+       
+       if (!data.questions || data.questions.length === 0) {
+         throw new Error('No questions generated');
+       }
 
-      setQuestions(data.questions);
-      
       const questionsToInsert = data.questions.map((q: Question) => ({
         interview_id: id,
         question_type: q.question_type,
@@ -185,13 +190,20 @@ export default function HRInterview() {
         expected_answer: q.expected_answer,
       }));
 
-      const { data: savedQuestions } = await supabase
+       const { data: savedQuestions, error: insertError } = await supabase
         .from('interview_questions')
         .insert(questionsToInsert)
         .select();
 
-      if (savedQuestions) {
+       if (insertError) {
+         console.error('Failed to save questions:', insertError);
+         // Still show questions even if save failed
+         setQuestions(data.questions.map((q: Question, idx: number) => ({ ...q, id: `temp-${idx}` })));
+         toast.warning('Questions generated but may not be saved. Try refreshing.');
+       } else if (savedQuestions && savedQuestions.length > 0) {
         setQuestions(savedQuestions);
+       } else {
+         setQuestions(data.questions);
       }
     } catch (error) {
       console.error('Error generating questions:', error);
@@ -232,6 +244,36 @@ export default function HRInterview() {
     setSubmitting(true);
     try {
       await saveAnswer();
+       
+       // Check if questions were saved properly - if not, try to save them now
+       const questionsToEvaluate = questions.filter(q => q.id && !q.id.startsWith('temp-'));
+       if (questionsToEvaluate.length === 0 && questions.length > 0) {
+         // Questions exist but weren't saved - try to save them now
+         const questionsToInsert = questions.map((q: Question) => ({
+           interview_id: id,
+           question_type: q.question_type,
+           difficulty: q.difficulty,
+           question_text: q.question_text,
+           expected_answer: q.expected_answer,
+           user_answer: q.user_answer || (q === questions[currentIndex] ? answer : undefined),
+         }));
+         
+         const { data: savedQuestions, error: insertError } = await supabase
+           .from('interview_questions')
+           .insert(questionsToInsert)
+           .select();
+           
+         if (insertError) {
+           console.error('Failed to save questions before evaluation:', insertError);
+           toast.error('Failed to save your answers. Please try again.');
+           setSubmitting(false);
+           return;
+         }
+         
+         if (savedQuestions) {
+           setQuestions(savedQuestions);
+         }
+       }
       
       const { data, error } = await supabase.functions.invoke('evaluate-interview', {
         body: { interviewId: id },
@@ -294,8 +336,8 @@ export default function HRInterview() {
           <div className="container mx-auto px-4 py-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
-                <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-orange-500/10">
-                  <Video className="h-5 w-5 text-orange-500" />
+                 <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-warning/10">
+                   <Video className="h-5 w-5 text-warning" />
                 </div>
                 <div>
                   <p className="font-medium">HR / Behavioral Interview</p>
@@ -333,7 +375,7 @@ export default function HRInterview() {
         {/* Progress Bar */}
         <div className="h-1 bg-secondary">
           <div 
-            className="h-full bg-orange-500 transition-all duration-300"
+             className="h-full bg-warning transition-all duration-300"
             style={{ width: `${((currentIndex + 1) / questions.length) * 100}%` }}
           />
         </div>
@@ -413,7 +455,7 @@ export default function HRInterview() {
                     }`}>
                       {currentQuestion.difficulty.toUpperCase()}
                     </span>
-                    <span className="px-2 py-1 rounded text-xs font-medium bg-orange-500/20 text-orange-500">
+                     <span className="px-2 py-1 rounded text-xs font-medium bg-warning/20 text-warning">
                       Behavioral Question
                     </span>
                   </div>
@@ -486,7 +528,7 @@ export default function HRInterview() {
                   }}
                   className={`w-8 h-8 rounded-full text-sm font-medium transition-all ${
                     idx === currentIndex
-                      ? 'bg-orange-500 text-white'
+                       ? 'bg-warning text-warning-foreground'
                       : 'bg-secondary hover:bg-secondary/80'
                   }`}
                 >
