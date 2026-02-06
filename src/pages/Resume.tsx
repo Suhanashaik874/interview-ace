@@ -163,16 +163,24 @@ export default function Resume() {
       const arrayBuffer = await file.arrayBuffer();
 
       // Use the legacy build for best compatibility across bundlers.
-      // We disable workers to avoid worker CDN/CORS issues in hosted previews.
       const pdfjsLib = (await import('pdfjs-dist/legacy/build/pdf.mjs')) as any;
       const { getDocument, GlobalWorkerOptions } = pdfjsLib;
 
-      if (GlobalWorkerOptions) {
-        GlobalWorkerOptions.workerSrc = '';
+      // pdfjs will throw at runtime if workerSrc is missing.
+      // We run in disableWorker mode for maximum compatibility in hosted previews,
+      // but still set workerSrc defensively in case pdfjs tries to initialize a worker.
+      try {
+        const workerModule: any = await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url');
+        if (GlobalWorkerOptions && workerModule?.default) {
+          GlobalWorkerOptions.workerSrc = workerModule.default;
+        }
+      } catch {
+        // Ignore and rely on disableWorker mode.
       }
 
       const loadingTask = getDocument({
         data: new Uint8Array(arrayBuffer),
+        disableWorker: true,
         useWorkerFetch: false,
         isEvalSupported: false,
         useSystemFonts: true,
