@@ -105,11 +105,30 @@ export default function Resume() {
     }
   };
 
+  const isAllowedResumeFile = (f: File) => {
+    const allowedMimeTypes = new Set([
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ]);
+
+    if (allowedMimeTypes.has(f.type)) return true;
+
+    // Some browsers/devices provide an empty or generic MIME type (e.g. application/octet-stream).
+    // Fall back to extension-based validation so users can still upload valid resumes.
+    const ext = f.name.split('.').pop()?.toLowerCase();
+    return ext === 'pdf' || ext === 'doc' || ext === 'docx';
+  };
+
+  const isPdfFile = (f: File) => {
+    if (f.type === 'application/pdf') return true;
+    const ext = f.name.split('.').pop()?.toLowerCase();
+    return ext === 'pdf';
+  };
+
   const handleFile = async (selectedFile: File) => {
-    const validTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
-    
-    if (!validTypes.includes(selectedFile.type)) {
-      toast.error('Please upload a PDF or Word document');
+    if (!isAllowedResumeFile(selectedFile)) {
+      toast.error('Please upload a PDF or Word document (.pdf, .doc, .docx)');
       return;
     }
 
@@ -118,18 +137,22 @@ export default function Resume() {
 
     try {
       let text = '';
-      
-      if (selectedFile.type === 'application/pdf') {
+
+      if (isPdfFile(selectedFile)) {
         text = await extractTextFromPDF(selectedFile);
       } else {
         text = await extractTextFromWord(selectedFile);
+      }
+
+      if (!text.trim()) {
+        throw new Error('No text could be extracted from this file.');
       }
 
       setExtractedText(text);
       await extractSkillsFromText(text, selectedFile.name);
     } catch (error) {
       console.error('Error processing file:', error);
-      toast.error('Failed to process the file. Please try again.');
+      toast.error(error instanceof Error ? error.message : 'Failed to process the file. Please try again.');
     } finally {
       setProcessing(false);
     }
@@ -138,23 +161,26 @@ export default function Resume() {
   const extractTextFromPDF = async (file: File): Promise<string> => {
     try {
       const arrayBuffer = await file.arrayBuffer();
-      
-      // Dynamic import of pdfjs-dist
-      const pdfjsLib = await import('pdfjs-dist');
-      
-      // Disable worker completely to avoid CDN/CORS issues
-      pdfjsLib.GlobalWorkerOptions.workerSrc = '';
-      
-      const loadingTask = pdfjsLib.getDocument({ 
+
+      // Use the legacy build for best compatibility across bundlers.
+      // We disable workers to avoid worker CDN/CORS issues in hosted previews.
+      const pdfjsLib = (await import('pdfjs-dist/legacy/build/pdf.mjs')) as any;
+      const { getDocument, GlobalWorkerOptions } = pdfjsLib;
+
+      if (GlobalWorkerOptions) {
+        GlobalWorkerOptions.workerSrc = '';
+      }
+
+      const loadingTask = getDocument({
         data: new Uint8Array(arrayBuffer),
         useWorkerFetch: false,
         isEvalSupported: false,
         useSystemFonts: true,
         disableFontFace: true,
       });
-      
+
       const pdf = await loadingTask.promise;
-      
+
       let text = '';
 
       for (let i = 1; i <= pdf.numPages; i++) {
@@ -168,7 +194,7 @@ export default function Resume() {
       }
 
       if (!text.trim()) {
-        throw new Error('No text could be extracted from the PDF. The file may be image-based or corrupted.');
+        throw new Error('No text could be extracted from the PDF. The file may be image-based.');
       }
 
       return text;
@@ -186,48 +212,54 @@ export default function Resume() {
 
   const extractSkillsFromText = async (text: string, fileName: string) => {
     try {
-      // Call the AI edge function to extract skills
+      // Call the backend function to extract skills
       const { data, error } = await supabase.functions.invoke('extract-skills', {
         body: { resumeText: text },
       });
 
-      if (error) throw error;
-
-      const extractedSkills: ExtractedSkill[] = data.skills || [];
-      setSkills(extractedSkills);
-
-      // Save resume to database
-      const { data: resumeData, error: resumeError } = await supabase
-        .from('resumes')
-        .insert({
-          user_id: user?.id,
-          file_name: fileName,
-          raw_text: text,
-        })
-        .select()
-        .single();
-
-      if (resumeError) throw resumeError;
-
-      // Save skills to database
-      if (extractedSkills.length > 0) {
-        const skillsToInsert = extractedSkills.map(skill => ({
-          resume_id: resumeData.id,
-          user_id: user?.id,
-          skill_name: skill.name,
-          proficiency_level: skill.level,
-        }));
-
-        const { error: skillsError } = await supabase
-          .from('extracted_skills')
-          .insert(skillsToInsert);
-
-        if (skillsError) throw skillsError;
+      if (error) {
+        console.error('extract-skills invoke error:', error);
+        throw error;
       }
 
-      setExistingResume(resumeData);
+      const extractedSkills: ExtractedSkill[] = data?.skills || [];
+
+      // Show the skills UI immediately so the user can select proficiency even if persistence fails.
+      setSkills(extractedSkills);
       setStep('skills');
-      toast.success('Resume processed successfully!');
+
+      // Best-effort persistence
+      try {
+        const { data: resumeData, error: resumeError } = await supabase
+          .from('resumes')
+          .insert({
+            user_id: user?.id,
+            file_name: fileName,
+            raw_text: text,
+          })
+          .select()
+          .single();
+
+        if (resumeError) throw resumeError;
+
+        if (extractedSkills.length > 0) {
+          const skillsToInsert = extractedSkills.map((skill) => ({
+            resume_id: resumeData.id,
+            user_id: user?.id,
+            skill_name: skill.name,
+            proficiency_level: skill.level,
+          }));
+
+          const { error: skillsError } = await supabase.from('extracted_skills').insert(skillsToInsert);
+          if (skillsError) throw skillsError;
+        }
+
+        setExistingResume(resumeData);
+        toast.success('Resume processed successfully!');
+      } catch (persistError) {
+        console.error('Failed to persist resume/skills:', persistError);
+        toast.error('Skills were extracted, but saving failed. You can still select levels and continue.');
+      }
     } catch (error) {
       console.error('Error extracting skills:', error);
       toast.error('Failed to extract skills. Please try again.');
