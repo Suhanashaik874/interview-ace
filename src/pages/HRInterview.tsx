@@ -1,6 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { 
   Clock, 
@@ -52,12 +51,26 @@ export default function HRInterview() {
   const [isMicOn, setIsMicOn] = useState(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [isPracticeMode, setIsPracticeMode] = useState(true);
-  
+
+  // Use a ref to always have the latest answers without stale closures
+  const questionsRef = useRef<Question[]>([]);
+  useEffect(() => { questionsRef.current = questions; }, [questions]);
+
+  const answerRef = useRef('');
+  useEffect(() => { answerRef.current = answer; }, [answer]);
+
+  const currentIndexRef = useRef(0);
+  useEffect(() => { currentIndexRef.current = currentIndex; }, [currentIndex]);
+
   // Update answer in questions array for persistence
   const updateQuestionAnswer = useCallback((index: number, newAnswer: string) => {
-    setQuestions(prev => prev.map((q, i) => 
-      i === index ? { ...q, user_answer: newAnswer } : q
-    ));
+    setQuestions(prev => {
+      const updated = prev.map((q, i) => 
+        i === index ? { ...q, user_answer: newAnswer } : q
+      );
+      questionsRef.current = updated;
+      return updated;
+    });
   }, []);
 
   useEffect(() => {
@@ -87,7 +100,7 @@ export default function HRInterview() {
     };
   }, [stream]);
 
-  // Sync video stream to video element when stream or videoRef changes
+  // Sync video stream to video element
   useEffect(() => {
     if (videoRef.current && stream && isVideoOn) {
       videoRef.current.srcObject = stream;
@@ -110,7 +123,6 @@ export default function HRInterview() {
     } else {
       try {
         const mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: isMicOn });
-        // Stop any existing stream first
         if (stream) {
           stream.getTracks().forEach(track => track.stop());
         }
@@ -132,7 +144,6 @@ export default function HRInterview() {
       setIsMicOn(false);
     } else {
       try {
-        // If video is already on, just enable audio track on existing stream
         if (isVideoOn && stream) {
           const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
           audioStream.getAudioTracks().forEach(track => {
@@ -148,6 +159,31 @@ export default function HRInterview() {
         console.error('Error accessing microphone:', error);
         toast.error('Could not access microphone. Please check permissions.');
       }
+    }
+  };
+
+  // Fetch resume text and skills for the current user
+  const fetchResumeContext = async (): Promise<{ resumeText: string; skills: any[] }> => {
+    try {
+      const { data: resumes } = await supabase
+        .from('resumes')
+        .select('raw_text')
+        .eq('user_id', user?.id)
+        .order('uploaded_at', { ascending: false })
+        .limit(1);
+
+      const { data: skillsData } = await supabase
+        .from('extracted_skills')
+        .select('skill_name, proficiency_level')
+        .eq('user_id', user?.id);
+
+      return {
+        resumeText: resumes?.[0]?.raw_text || '',
+        skills: skillsData || [],
+      };
+    } catch (error) {
+      console.error('Error fetching resume context:', error);
+      return { resumeText: '', skills: [] };
     }
   };
 
@@ -173,6 +209,7 @@ export default function HRInterview() {
 
       if (existingQuestions && existingQuestions.length > 0) {
         setQuestions(existingQuestions);
+        questionsRef.current = existingQuestions;
         if (existingQuestions[0].user_answer) {
           setAnswer(existingQuestions[0].user_answer);
         }
@@ -181,7 +218,7 @@ export default function HRInterview() {
       }
     } catch (error) {
       console.error('Error fetching interview:', error);
-       toast.error('Failed to load interview. Please try again.');
+      toast.error('Failed to load interview. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -190,23 +227,27 @@ export default function HRInterview() {
   const generateQuestions = async () => {
     setGenerating(true);
     try {
+      // Fetch resume context for personalized HR questions
+      const { resumeText, skills: userSkills } = await fetchResumeContext();
+
       const { data, error } = await supabase.functions.invoke('generate-questions', {
         body: { 
           interviewType: 'hr', 
-          skills: [],
+          skills: userSkills,
           interviewId: id,
           difficulty: searchParams.get('difficulty') || 'medium',
+          resumeText: resumeText,
         },
       });
 
-       if (error) {
-         console.error('Generate questions error:', error);
-         throw error;
-       }
+      if (error) {
+        console.error('Generate questions error:', error);
+        throw error;
+      }
        
-       if (!data.questions || data.questions.length === 0) {
-         throw new Error('No questions generated');
-       }
+      if (!data.questions || data.questions.length === 0) {
+        throw new Error('No questions generated');
+      }
 
       const questionsToInsert = data.questions.map((q: Question) => ({
         interview_id: id,
@@ -216,20 +257,36 @@ export default function HRInterview() {
         expected_answer: q.expected_answer,
       }));
 
-       const { data: savedQuestions, error: insertError } = await supabase
+      const { data: savedQuestions, error: insertError } = await supabase
         .from('interview_questions')
         .insert(questionsToInsert)
         .select();
 
-       if (insertError) {
-         console.error('Failed to save questions:', insertError);
-         // Still show questions even if save failed
-         setQuestions(data.questions.map((q: Question, idx: number) => ({ ...q, id: `temp-${idx}` })));
-         toast.warning('Questions generated but may not be saved. Try refreshing.');
-       } else if (savedQuestions && savedQuestions.length > 0) {
+      if (insertError) {
+        console.error('Failed to save questions:', insertError);
+        // Retry once after a short delay
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        const { data: retryQuestions, error: retryError } = await supabase
+          .from('interview_questions')
+          .insert(questionsToInsert)
+          .select();
+
+        if (retryError) {
+          console.error('Retry also failed:', retryError);
+          setQuestions(data.questions.map((q: Question, idx: number) => ({ ...q, id: `temp-${idx}` })));
+          questionsRef.current = data.questions.map((q: Question, idx: number) => ({ ...q, id: `temp-${idx}` }));
+          toast.warning('Questions generated but may not be saved. Try refreshing the page.');
+        } else if (retryQuestions && retryQuestions.length > 0) {
+          setQuestions(retryQuestions);
+          questionsRef.current = retryQuestions;
+          toast.success('Questions generated successfully!');
+        }
+      } else if (savedQuestions && savedQuestions.length > 0) {
         setQuestions(savedQuestions);
-       } else {
-         setQuestions(data.questions);
+        questionsRef.current = savedQuestions;
+      } else {
+        setQuestions(data.questions);
+        questionsRef.current = data.questions;
       }
     } catch (error) {
       console.error('Error generating questions:', error);
@@ -239,83 +296,105 @@ export default function HRInterview() {
     }
   };
 
-  const saveAnswer = async () => {
-    // Update local state first
-    updateQuestionAnswer(currentIndex, answer);
-    
-    const currentQuestion = questions[currentIndex];
-    if (!currentQuestion?.id || currentQuestion.id.startsWith('temp-')) return;
+  const saveAnswerToDB = async (questionId: string | undefined, answerText: string) => {
+    if (!questionId || questionId.startsWith('temp-')) return;
+    try {
+      await supabase
+        .from('interview_questions')
+        .update({ user_answer: answerText })
+        .eq('id', questionId);
+    } catch (err) {
+      console.error('Failed to save answer to DB:', err);
+    }
+  };
 
-    await supabase
-      .from('interview_questions')
-      .update({ user_answer: answer })
-      .eq('id', currentQuestion.id);
+  const saveAnswer = async () => {
+    updateQuestionAnswer(currentIndex, answer);
+    await saveAnswerToDB(questions[currentIndex]?.id, answer);
   };
 
   const nextQuestion = async () => {
     // Save current answer to state and DB
     updateQuestionAnswer(currentIndex, answer);
-    const currentQuestion = questions[currentIndex];
-    if (currentQuestion?.id && !currentQuestion.id.startsWith('temp-')) {
-      await supabase
-        .from('interview_questions')
-        .update({ user_answer: answer })
-        .eq('id', currentQuestion.id);
-    }
+    await saveAnswerToDB(questions[currentIndex]?.id, answer);
     
     if (currentIndex < questions.length - 1) {
       const nextIdx = currentIndex + 1;
       setCurrentIndex(nextIdx);
-      // Use setTimeout to ensure state is updated
-      setAnswer(questions[nextIdx].user_answer || '');
+      // Read from the ref to get the latest state
+      const nextAnswer = questionsRef.current[nextIdx]?.user_answer || '';
+      setAnswer(nextAnswer);
     }
   };
 
   const prevQuestion = () => {
     // Save current answer to state
     updateQuestionAnswer(currentIndex, answer);
+    saveAnswerToDB(questions[currentIndex]?.id, answer);
     
     if (currentIndex > 0) {
       const prevIdx = currentIndex - 1;
       setCurrentIndex(prevIdx);
-      setAnswer(questions[prevIdx].user_answer || '');
+      const prevAnswer = questionsRef.current[prevIdx]?.user_answer || '';
+      setAnswer(prevAnswer);
     }
+  };
+
+  const goToQuestion = async (idx: number) => {
+    // Save current answer first
+    updateQuestionAnswer(currentIndex, answer);
+    await saveAnswerToDB(questions[currentIndex]?.id, answer);
+    setCurrentIndex(idx);
+    const targetAnswer = questionsRef.current[idx]?.user_answer || '';
+    setAnswer(targetAnswer);
   };
 
   const finishInterview = async () => {
     setSubmitting(true);
     try {
-      await saveAnswer();
-       
-       // Check if questions were saved properly - if not, try to save them now
-       const questionsToEvaluate = questions.filter(q => q.id && !q.id.startsWith('temp-'));
-       if (questionsToEvaluate.length === 0 && questions.length > 0) {
-         // Questions exist but weren't saved - try to save them now
-         const questionsToInsert = questions.map((q: Question) => ({
-           interview_id: id,
-           question_type: q.question_type,
-           difficulty: q.difficulty,
-           question_text: q.question_text,
-           expected_answer: q.expected_answer,
-           user_answer: q.user_answer || (q === questions[currentIndex] ? answer : undefined),
-         }));
-         
-         const { data: savedQuestions, error: insertError } = await supabase
-           .from('interview_questions')
-           .insert(questionsToInsert)
-           .select();
-           
-         if (insertError) {
-           console.error('Failed to save questions before evaluation:', insertError);
-           toast.error('Failed to save your answers. Please try again.');
-           setSubmitting(false);
-           return;
-         }
-         
-         if (savedQuestions) {
-           setQuestions(savedQuestions);
-         }
-       }
+      // Save current answer
+      updateQuestionAnswer(currentIndex, answer);
+      await saveAnswerToDB(questions[currentIndex]?.id, answer);
+
+      // Check if questions were saved properly - if not, try to save them now
+      const questionsToEvaluate = questionsRef.current.filter(q => q.id && !q.id.startsWith('temp-'));
+      if (questionsToEvaluate.length === 0 && questionsRef.current.length > 0) {
+        // Questions exist but weren't saved - try to save them now with answers
+        const questionsToInsert = questionsRef.current.map((q: Question) => ({
+          interview_id: id,
+          question_type: q.question_type,
+          difficulty: q.difficulty,
+          question_text: q.question_text,
+          expected_answer: q.expected_answer,
+          user_answer: q.user_answer || '',
+        }));
+        
+        const { data: savedQuestions, error: insertError } = await supabase
+          .from('interview_questions')
+          .insert(questionsToInsert)
+          .select();
+          
+        if (insertError) {
+          console.error('Failed to save questions before evaluation:', insertError);
+          toast.error('Failed to save your answers. Please try again.');
+          setSubmitting(false);
+          return;
+        }
+        
+        if (savedQuestions) {
+          setQuestions(savedQuestions);
+          questionsRef.current = savedQuestions;
+        }
+      } else {
+        // Save all answers one more time to make sure they're persisted
+        await Promise.all(
+          questionsRef.current.map(q => 
+            q.id && !q.id.startsWith('temp-') && q.user_answer
+              ? saveAnswerToDB(q.id, q.user_answer)
+              : Promise.resolve()
+          )
+        );
+      }
       
       const { data, error } = await supabase.functions.invoke('evaluate-interview', {
         body: { interviewId: id },
@@ -361,7 +440,7 @@ export default function HRInterview() {
       <div className="min-h-screen flex flex-col items-center justify-center gap-4">
         <Loader2 className="h-12 w-12 text-primary animate-spin" />
         <p className="text-lg font-medium">Preparing your HR interview...</p>
-        <p className="text-sm text-muted-foreground">Generating behavioral questions</p>
+        <p className="text-sm text-muted-foreground">Generating personalized questions from your resume</p>
       </div>
     );
   }
@@ -378,8 +457,8 @@ export default function HRInterview() {
           <div className="container mx-auto px-4 py-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
-                 <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-warning/10">
-                   <Video className="h-5 w-5 text-warning" />
+                <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-warning/10">
+                  <Video className="h-5 w-5 text-warning" />
                 </div>
                 <div>
                   <p className="font-medium">HR / Behavioral Interview</p>
@@ -417,7 +496,7 @@ export default function HRInterview() {
         {/* Progress Bar */}
         <div className="h-1 bg-secondary">
           <div 
-             className="h-full bg-warning transition-all duration-300"
+            className="h-full bg-warning transition-all duration-300"
             style={{ width: `${((currentIndex + 1) / questions.length) * 100}%` }}
           />
         </div>
@@ -497,7 +576,7 @@ export default function HRInterview() {
                     }`}>
                       {currentQuestion.difficulty.toUpperCase()}
                     </span>
-                     <span className="px-2 py-1 rounded text-xs font-medium bg-warning/20 text-warning">
+                    <span className="px-2 py-1 rounded text-xs font-medium bg-warning/20 text-warning">
                       Behavioral Question
                     </span>
                   </div>
@@ -567,21 +646,12 @@ export default function HRInterview() {
               {questions.map((_, idx) => (
                 <button
                   key={idx}
-                  onClick={async () => {
-                    // Save current answer first
-                    updateQuestionAnswer(currentIndex, answer);
-                    if (questions[currentIndex]?.id && !questions[currentIndex].id?.startsWith('temp-')) {
-                      await supabase
-                        .from('interview_questions')
-                        .update({ user_answer: answer })
-                        .eq('id', questions[currentIndex].id);
-                    }
-                    setCurrentIndex(idx);
-                    setAnswer(questions[idx].user_answer || '');
-                  }}
+                  onClick={() => goToQuestion(idx)}
                   className={`w-8 h-8 rounded-full text-sm font-medium transition-all ${
                     idx === currentIndex
-                       ? 'bg-warning text-warning-foreground'
+                      ? 'bg-warning text-warning-foreground'
+                      : questionsRef.current[idx]?.user_answer
+                      ? 'bg-success/30 text-success'
                       : 'bg-secondary hover:bg-secondary/80'
                   }`}
                 >

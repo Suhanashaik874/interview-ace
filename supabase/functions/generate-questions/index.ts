@@ -19,13 +19,74 @@ function getDifficultyFromLevel(level: string): string {
   }
 }
 
+function buildHRPrompt(numQuestions: number, resumeText?: string, skills?: Skill[]): string {
+  const hasResume = resumeText && resumeText.trim().length > 0;
+  const hasSkills = skills && skills.length > 0;
+
+  let context = '';
+  if (hasResume) {
+    context += `\n\nCANDIDATE'S RESUME (use this to personalize questions):\n${resumeText.slice(0, 6000)}\n`;
+  }
+  if (hasSkills) {
+    context += `\nCANDIDATE'S SKILLS: ${skills.map(s => `${s.skill_name} (${s.proficiency_level})`).join(', ')}\n`;
+  }
+
+  return `You are an expert HR interviewer generating highly personalized behavioral and situational interview questions.
+${context}
+
+Generate ${numQuestions} HR/behavioral interview questions. 
+
+${hasResume ? `CRITICAL INSTRUCTIONS FOR PERSONALIZATION:
+- Extract project names, technologies, and experiences mentioned in the resume.
+- At least 50% of the questions MUST be directly about specific projects or experiences from the resume.
+- Ask about the tech stack choices they made in specific projects (e.g., "In your [project name] project, why did you choose [technology]?")
+- Ask about challenges they faced during specific projects mentioned in the resume
+- Ask about their role and contributions in team projects mentioned
+- Ask about what they would do differently if they rebuilt a specific project
+- Reference actual project names, company names, or technologies from their resume
+
+Examples of good personalized questions:
+- "Tell me about your [Project Name] project. What was the biggest technical challenge you faced and how did you overcome it?"
+- "You mentioned using [Technology] in your [Project Name]. Why did you choose this over alternatives?"
+- "What was your specific role in the [Project Name] project? How did you collaborate with your team?"
+- "If you could rebuild [Project Name] from scratch, what would you do differently and why?"
+` : ''}
+
+Mix the following question types:
+1. Project-specific questions (about projects from resume) - at least ${hasResume ? '50%' : '0%'} of questions
+2. Behavioral questions (Tell me about a time when...) with STAR method focus
+3. Situational questions (What would you do if...)
+4. Technical decision-making questions (Why did you choose X over Y?)
+
+Cover these areas:
+- Project challenges and problem-solving
+- Tech stack decisions and trade-offs
+- Leadership and teamwork
+- Communication skills
+- Conflict resolution and adaptability
+- Career goals and motivation
+
+For each question, provide:
+- question_type: "hr"
+- difficulty: "easy" | "medium" | "hard"
+- question_text: the interview question (reference specific projects/technologies from resume when possible)
+- expected_answer: key points and structure that a good answer should include (for evaluation purposes)
+
+Vary the difficulty:
+- Easy: Basic self-introduction and motivation questions
+- Medium: Behavioral questions requiring specific examples from projects
+- Hard: Complex situational questions requiring strategic thinking about architecture/design decisions
+
+Return only valid JSON with a "questions" array. Make each question unique, engaging, and deeply personalized to this candidate's background.`;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { interviewType, skills, interviewId, difficulty, language } = await req.json();
+    const { interviewType, skills, interviewId, difficulty, language, resumeText } = await req.json();
     
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     if (!LOVABLE_API_KEY) {
@@ -36,17 +97,6 @@ serve(async (req) => {
     const skillsList = skills as Skill[];
     const selectedLang = language || 'javascript';
     const selectedDifficulty = difficulty || 'adaptive';
-
-    // Determine difficulty level for questions
-    const getDifficulty = (skill?: Skill) => {
-      if (selectedDifficulty !== 'adaptive') {
-        return selectedDifficulty;
-      }
-      if (skill) {
-        return getDifficultyFromLevel(skill.proficiency_level);
-      }
-      return 'medium';
-    };
 
     let systemPrompt = '';
     
@@ -105,36 +155,12 @@ For aptitude questions, the JSON structure MUST be:
     }
 
     if (interviewType === 'hr') {
-      systemPrompt = `You are an expert HR interviewer generating behavioral and situational interview questions.
-
-Generate ${numQuestions} HR/behavioral interview questions covering:
-- Leadership and teamwork
-- Problem-solving and decision-making
-- Communication skills
-- Conflict resolution
-- Career goals and motivation
-- Adaptability and learning
-
-Include a mix of:
-1. Behavioral questions (Tell me about a time when...)
-2. Situational questions (What would you do if...)
-3. Competency-based questions
-
-For each question, provide:
-- question_type: "hr"
-- difficulty: "easy" | "medium" | "hard"
-- question_text: the interview question
-- expected_answer: key points and structure that a good answer should include (for evaluation purposes)
-
-Vary the difficulty:
-- Easy: Basic self-introduction and motivation questions
-- Medium: Behavioral questions requiring specific examples
-- Hard: Complex situational questions requiring strategic thinking`;
+      systemPrompt = buildHRPrompt(numQuestions, resumeText, skillsList);
     }
 
     systemPrompt += '\n\nReturn only valid JSON with a "questions" array. Make each question unique and engaging. Ensure all aptitude questions have exactly 4 options in the options array.';
 
-    console.log('Generating questions with:', { interviewType, difficulty: selectedDifficulty, language: selectedLang });
+    console.log('Generating questions with:', { interviewType, difficulty: selectedDifficulty, language: selectedLang, hasResumeContext: !!resumeText });
 
     const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
@@ -179,7 +205,6 @@ Vary the difficulty:
       // Ensure all aptitude questions have proper options array
       questions = questions.map((q: any) => {
         if (q.question_type !== 'coding' && q.question_type !== 'hr') {
-          // Ensure options is an array with 4 items
           if (!Array.isArray(q.options) || q.options.length !== 4) {
             console.warn('Question missing proper options, generating defaults:', q.question_text?.substring(0, 50));
             q.options = ['Option A', 'Option B', 'Option C', 'Option D'];
@@ -189,7 +214,6 @@ Vary the difficulty:
       });
     } catch (e) {
       console.error('Failed to parse AI response:', content);
-      // Fallback questions with proper options
       if (interviewType === 'aptitude') {
         questions = [
           {
