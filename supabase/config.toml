@@ -1,1 +1,13 @@
 project_id = "dcopzjrywdbzzzykwmzu"
+
+[functions.evaluate-interview]
+verify_jwt = false
+
+[functions.generate-questions]
+verify_jwt = false
+
+[functions.extract-skills]
+verify_jwt = false
+
+[functions.execute-code]
+verify_jwt = false

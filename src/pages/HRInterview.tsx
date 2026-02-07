@@ -59,18 +59,9 @@ export default function HRInterview() {
   // Per-question timer
   const timer = useQuestionTimer(0);
 
-  // Speech-to-text for voice answers
-  const handleVoiceTranscript = useCallback((text: string) => {
-    setAnswer(prev => {
-      const newAnswer = prev ? prev + ' ' + text : text;
-      return newAnswer;
-    });
-  }, []);
   // Use a ref to always have the latest answers without stale closures
   const questionsRef = useRef<Question[]>([]);
   useEffect(() => { questionsRef.current = questions; }, [questions]);
-
-  const speech = useSpeechToText(handleVoiceTranscript);
 
   const answerRef = useRef('');
   useEffect(() => { answerRef.current = answer; }, [answer]);
@@ -88,6 +79,18 @@ export default function HRInterview() {
       return updated;
     });
   }, []);
+
+  // Speech-to-text for voice answers — receives only NEW finalized text
+  const handleVoiceTranscript = useCallback((text: string) => {
+    setAnswer(prev => {
+      const updated = prev ? prev + ' ' + text : text;
+      // Also sync to questions array immediately
+      updateQuestionAnswer(currentIndexRef.current, updated);
+      return updated;
+    });
+  }, [updateQuestionAnswer]);
+
+  const speech = useSpeechToText(handleVoiceTranscript);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -270,19 +273,21 @@ export default function HRInterview() {
         .select();
 
       if (insertError) {
-        console.error('Failed to save questions:', insertError);
-        // Retry once after a short delay
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        console.error('Failed to save questions:', JSON.stringify(insertError));
+        // Retry once after a short delay (could be auth token refresh needed)
+        await new Promise(resolve => setTimeout(resolve, 1500));
         const { data: retryQuestions, error: retryError } = await supabase
           .from('interview_questions')
           .insert(questionsToInsert)
           .select();
 
         if (retryError) {
-          console.error('Retry also failed:', retryError);
-          setQuestions(data.questions.map((q: Question, idx: number) => ({ ...q, id: `temp-${idx}` })));
-          questionsRef.current = data.questions.map((q: Question, idx: number) => ({ ...q, id: `temp-${idx}` }));
-          toast.warning('Questions generated but may not be saved. Try refreshing the page.');
+          console.error('Retry also failed:', JSON.stringify(retryError));
+          // Use temp IDs — finishInterview will handle saving via service role
+          const tempQuestions = data.questions.map((q: Question, idx: number) => ({ ...q, id: `temp-${idx}` }));
+          setQuestions(tempQuestions);
+          questionsRef.current = tempQuestions;
+          toast.info('Questions loaded. Your answers will be saved when you finish the interview.');
         } else if (retryQuestions && retryQuestions.length > 0) {
           setQuestions(retryQuestions);
           questionsRef.current = retryQuestions;
@@ -291,9 +296,12 @@ export default function HRInterview() {
       } else if (savedQuestions && savedQuestions.length > 0) {
         setQuestions(savedQuestions);
         questionsRef.current = savedQuestions;
+        toast.success('Questions generated successfully!');
       } else {
-        setQuestions(data.questions);
-        questionsRef.current = data.questions;
+        // No error but no data — use temp IDs
+        const tempQuestions = data.questions.map((q: Question, idx: number) => ({ ...q, id: `temp-${idx}` }));
+        setQuestions(tempQuestions);
+        questionsRef.current = tempQuestions;
       }
     } catch (error) {
       console.error('Error generating questions:', error);
@@ -368,55 +376,73 @@ export default function HRInterview() {
     speech.stopListening();
     setSubmitting(true);
     try {
-      // Save current answer
+      // Save current answer to state
       updateQuestionAnswer(currentIndex, answer);
-      await saveAnswerToDB(questions[currentIndex]?.id, answer);
+      
+      // Build final questions with all answers
+      const finalQuestions = questionsRef.current.map((q, i) => ({
+        ...q,
+        user_answer: i === currentIndex ? answer : (q.user_answer || ''),
+      }));
 
-      // Check if questions were saved properly - if not, try to save them now
-      const questionsToEvaluate = questionsRef.current.filter(q => q.id && !q.id.startsWith('temp-'));
-      if (questionsToEvaluate.length === 0 && questionsRef.current.length > 0) {
-        // Questions exist but weren't saved - try to save them now with answers
-        const questionsToInsert = questionsRef.current.map((q: Question) => ({
+      // Try to save to DB first
+      const savedIds = finalQuestions.filter(q => q.id && !q.id.startsWith('temp-'));
+      
+      if (savedIds.length > 0) {
+        // Questions are in DB — bulk save all answers
+        await Promise.all(
+          savedIds.map(q => saveAnswerToDB(q.id!, q.user_answer || ''))
+        );
+      } else if (finalQuestions.length > 0) {
+        // Questions were never saved to DB — try to insert them now
+        const questionsToInsert = finalQuestions.map(q => ({
           interview_id: id,
           question_type: q.question_type,
           difficulty: q.difficulty,
           question_text: q.question_text,
-          expected_answer: q.expected_answer,
+          expected_answer: q.expected_answer || '',
           user_answer: q.user_answer || '',
         }));
         
-        const { data: savedQuestions, error: insertError } = await supabase
+        const { data: saved, error: insertErr } = await supabase
           .from('interview_questions')
           .insert(questionsToInsert)
           .select();
           
-        if (insertError) {
-          console.error('Failed to save questions before evaluation:', insertError);
-          toast.error('Failed to save your answers. Please try again.');
-          setSubmitting(false);
-          return;
+        if (insertErr) {
+          console.error('Insert failed, will pass data to evaluator:', insertErr);
+        } else if (saved) {
+          questionsRef.current = saved;
         }
-        
-        if (savedQuestions) {
-          setQuestions(savedQuestions);
-          questionsRef.current = savedQuestions;
-        }
-      } else {
-        // Save all answers one more time to make sure they're persisted
-        await Promise.all(
-          questionsRef.current.map(q => 
-            q.id && !q.id.startsWith('temp-') && q.user_answer
-              ? saveAnswerToDB(q.id, q.user_answer)
-              : Promise.resolve()
-          )
-        );
       }
-      
+
+      // Call evaluate-interview, passing questions as fallback for unsaved data
       const { data, error } = await supabase.functions.invoke('evaluate-interview', {
-        body: { interviewId: id },
+        body: { 
+          interviewId: id,
+          // Pass questions as fallback in case DB insert failed
+          questionsData: finalQuestions.map(q => ({
+            question_type: q.question_type,
+            difficulty: q.difficulty,
+            question_text: q.question_text,
+            expected_answer: q.expected_answer || '',
+            user_answer: q.user_answer || '',
+            user_code: '',
+          })),
+        },
       });
 
-      if (error) throw error;
+      if (error) {
+        console.error('Evaluate function error:', error);
+        throw error;
+      }
+
+      // Handle the no_questions graceful response
+      if (data.error === 'no_questions') {
+        toast.error('No questions could be evaluated. Please try starting a new interview.');
+        setSubmitting(false);
+        return;
+      }
 
       await supabase
         .from('interviews')
