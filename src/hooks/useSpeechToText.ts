@@ -56,20 +56,22 @@ export function useSpeechToText(
     recognition.interimResults = true;
     recognition.lang = 'en-US';
 
-    let finalTranscript = '';
+    let fullTranscript = '';
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
       let interim = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
         if (result.isFinal) {
-          finalTranscript += result[0].transcript + ' ';
-          onTranscriptRef.current?.(finalTranscript.trim());
+          const newText = result[0].transcript.trim();
+          fullTranscript += (fullTranscript ? ' ' : '') + newText;
+          // Send only the NEW finalized text, not the full accumulated transcript
+          onTranscriptRef.current?.(newText);
         } else {
           interim += result[0].transcript;
         }
       }
-      setTranscript(finalTranscript + interim);
+      setTranscript(fullTranscript + (interim ? ' ' + interim : ''));
     };
 
     recognition.onerror = (event) => {

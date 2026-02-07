@@ -12,7 +12,7 @@ serve(async (req) => {
   }
 
   try {
-    const { interviewId } = await req.json();
+    const { interviewId, questionsData } = await req.json();
     
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
@@ -25,7 +25,7 @@ serve(async (req) => {
     const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
 
     // Fetch all questions for this interview
-    const { data: questions, error: fetchError } = await supabase
+    let { data: questions, error: fetchError } = await supabase
       .from('interview_questions')
       .select('*')
       .eq('interview_id', interviewId);
@@ -35,9 +35,34 @@ serve(async (req) => {
        throw fetchError;
      }
      
+    // If no questions in DB but we received them in the body, save them first
+    if ((!questions || questions.length === 0) && questionsData && questionsData.length > 0) {
+      console.log('No questions in DB, saving from request body...');
+      const toInsert = questionsData.map((q: any) => ({
+        interview_id: interviewId,
+        question_type: q.question_type || 'hr',
+        difficulty: q.difficulty || 'medium',
+        question_text: q.question_text,
+        expected_answer: q.expected_answer || '',
+        user_answer: q.user_answer || '',
+        user_code: q.user_code || null,
+      }));
+      
+      const { data: savedQ, error: saveErr } = await supabase
+        .from('interview_questions')
+        .insert(toInsert)
+        .select();
+        
+      if (saveErr) {
+        console.error('Failed to save fallback questions:', saveErr);
+      } else {
+        questions = savedQ;
+        console.log(`Saved ${questions?.length} questions from request body`);
+      }
+    }
+
     if (!questions || questions.length === 0) {
        console.error('No questions found for interview:', interviewId);
-       // Return a graceful response instead of throwing
        return new Response(
          JSON.stringify({ 
            totalScore: 0, 
