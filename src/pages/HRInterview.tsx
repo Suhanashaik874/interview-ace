@@ -13,8 +13,13 @@ import {
   MicOff,
   Send,
   MessageSquare,
-  Camera
+  Camera,
+  Timer,
+  MicIcon,
+  StopCircle
 } from 'lucide-react';
+import { useQuestionTimer } from '@/hooks/useQuestionTimer';
+import { useSpeechToText } from '@/hooks/useSpeechToText';
 import { Button } from '@/components/ui/button';
 import { Navbar } from '@/components/layout/Navbar';
 import { useAuth } from '@/hooks/useAuth';
@@ -45,16 +50,27 @@ export default function HRInterview() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [answer, setAnswer] = useState('');
-  const [timeElapsed, setTimeElapsed] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [isVideoOn, setIsVideoOn] = useState(false);
   const [isMicOn, setIsMicOn] = useState(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [isPracticeMode, setIsPracticeMode] = useState(true);
 
+  // Per-question timer
+  const timer = useQuestionTimer(0);
+
+  // Speech-to-text for voice answers
+  const handleVoiceTranscript = useCallback((text: string) => {
+    setAnswer(prev => {
+      const newAnswer = prev ? prev + ' ' + text : text;
+      return newAnswer;
+    });
+  }, []);
   // Use a ref to always have the latest answers without stale closures
   const questionsRef = useRef<Question[]>([]);
   useEffect(() => { questionsRef.current = questions; }, [questions]);
+
+  const speech = useSpeechToText(handleVoiceTranscript);
 
   const answerRef = useRef('');
   useEffect(() => { answerRef.current = answer; }, [answer]);
@@ -85,12 +101,7 @@ export default function HRInterview() {
     }
   }, [user, id]);
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setTimeElapsed((prev) => prev + 1);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
+  // Old timer removed - using useQuestionTimer hook instead
 
   useEffect(() => {
     return () => {
@@ -108,11 +119,7 @@ export default function HRInterview() {
     }
   }, [stream, isVideoOn]);
 
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
+  // formatTime is now handled by the useQuestionTimer hook
 
   const toggleVideo = async () => {
     if (isVideoOn) {
@@ -321,7 +328,9 @@ export default function HRInterview() {
     if (currentIndex < questions.length - 1) {
       const nextIdx = currentIndex + 1;
       setCurrentIndex(nextIdx);
-      // Read from the ref to get the latest state
+      timer.switchToQuestion(nextIdx);
+      speech.stopListening();
+      speech.resetTranscript();
       const nextAnswer = questionsRef.current[nextIdx]?.user_answer || '';
       setAnswer(nextAnswer);
     }
@@ -335,6 +344,9 @@ export default function HRInterview() {
     if (currentIndex > 0) {
       const prevIdx = currentIndex - 1;
       setCurrentIndex(prevIdx);
+      timer.switchToQuestion(prevIdx);
+      speech.stopListening();
+      speech.resetTranscript();
       const prevAnswer = questionsRef.current[prevIdx]?.user_answer || '';
       setAnswer(prevAnswer);
     }
@@ -345,11 +357,15 @@ export default function HRInterview() {
     updateQuestionAnswer(currentIndex, answer);
     await saveAnswerToDB(questions[currentIndex]?.id, answer);
     setCurrentIndex(idx);
+    timer.switchToQuestion(idx);
+    speech.stopListening();
+    speech.resetTranscript();
     const targetAnswer = questionsRef.current[idx]?.user_answer || '';
     setAnswer(targetAnswer);
   };
 
   const finishInterview = async () => {
+    speech.stopListening();
     setSubmitting(true);
     try {
       // Save current answer
@@ -469,9 +485,15 @@ export default function HRInterview() {
               </div>
 
               <div className="flex items-center gap-6">
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Clock className="h-4 w-4" />
-                  <span className="timer-display">{formatTime(timeElapsed)}</span>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 text-muted-foreground" title="Total time">
+                    <Clock className="h-4 w-4" />
+                    <span className="timer-display">{timer.formattedTotalTime}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-warning/10 text-warning text-sm font-medium" title="Time on this question">
+                    <Timer className="h-3.5 w-3.5" />
+                    <span>{timer.formattedQuestionTime}</span>
+                  </div>
                 </div>
                 
                 <Button
@@ -594,16 +616,48 @@ export default function HRInterview() {
                 animate={{ opacity: 1, x: 0 }}
                 className="glass-card p-6"
               >
-                <div className="flex items-center gap-2 mb-4">
-                  <MessageSquare className="h-5 w-5 text-primary" />
-                  <span className="font-medium">Your Response</span>
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <MessageSquare className="h-5 w-5 text-primary" />
+                    <span className="font-medium">Your Response</span>
+                  </div>
+                  {speech.isSupported && (
+                    <Button
+                      variant={speech.isListening ? "destructive" : "outline"}
+                      size="sm"
+                      onClick={speech.toggleListening}
+                      className="gap-2"
+                    >
+                      {speech.isListening ? (
+                        <>
+                          <StopCircle className="h-4 w-4 animate-pulse" />
+                          Stop Recording
+                        </>
+                      ) : (
+                        <>
+                          <MicIcon className="h-4 w-4" />
+                          Voice Input
+                        </>
+                      )}
+                    </Button>
+                  )}
                 </div>
+
+                {speech.isListening && (
+                  <div className="mb-3 flex items-center gap-2 px-3 py-2 rounded-lg bg-destructive/10 text-destructive text-sm">
+                    <span className="relative flex h-2.5 w-2.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-destructive opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-destructive"></span>
+                    </span>
+                    Listening... Speak your answer clearly
+                  </div>
+                )}
 
                 <Textarea
                   value={answer}
                   onChange={(e) => setAnswer(e.target.value)}
-                  placeholder="Type your answer here. Use the STAR method (Situation, Task, Action, Result) for behavioral questions..."
-                  className="min-h-[300px] resize-none"
+                  placeholder="Type your answer or click 'Voice Input' to speak. Use the STAR method (Situation, Task, Action, Result) for behavioral questions..."
+                  className="min-h-[250px] resize-none"
                 />
 
                 <div className="mt-4 p-4 rounded-lg bg-secondary/30">
