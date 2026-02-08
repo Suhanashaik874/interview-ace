@@ -460,7 +460,7 @@ export default function Interview() {
                 key={currentIndex}
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
-                className="glass-card p-6"
+                className="glass-card p-6 max-h-[calc(100vh-12rem)] overflow-y-auto"
               >
                 <div className="flex items-center gap-2 mb-4">
                   <span className={`px-2 py-1 rounded text-xs font-medium ${
