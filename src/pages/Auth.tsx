@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Brain, Mail, Lock, User, ArrowRight, Loader2, ArrowLeft } from 'lucide-react';
+import { Mail, Lock, User, ArrowRight, Loader2, ArrowLeft } from 'lucide-react';
+import logo from '@/assets/logo.png';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -138,7 +139,7 @@ export default function Auth() {
       >
         <div className="glass-card p-8">
           <div className="flex items-center justify-center gap-2 mb-8">
-            <Brain className="h-8 w-8 text-primary" />
+            <img src={logo} alt="InterviewAI Logo" className="h-8 w-8" />
             <span className="text-2xl font-bold gradient-text">InterviewAI</span>
           </div>
 

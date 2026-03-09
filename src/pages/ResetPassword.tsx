@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Brain, Lock, ArrowRight, Loader2, CheckCircle } from 'lucide-react';
+import { Lock, ArrowRight, Loader2, CheckCircle } from 'lucide-react';
+import logo from '@/assets/logo.png';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -68,7 +69,7 @@ export default function ResetPassword() {
       >
         <div className="glass-card p-8">
           <div className="flex items-center justify-center gap-2 mb-8">
-            <Brain className="h-8 w-8 text-primary" />
+            <img src={logo} alt="InterviewAI Logo" className="h-8 w-8" />
             <span className="text-2xl font-bold gradient-text">InterviewAI</span>
           </div>
 

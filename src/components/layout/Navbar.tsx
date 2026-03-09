@@ -1,6 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Brain, LogOut, User, LayoutDashboard, FileText } from 'lucide-react';
+import { LogOut, User, LayoutDashboard, FileText } from 'lucide-react';
+import logo from '@/assets/logo.png';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
 import {
@@ -31,7 +32,7 @@ export function Navbar() {
         <div className="flex h-16 items-center justify-between">
           <Link to="/" className="flex items-center gap-2">
             <div className="relative">
-              <Brain className="h-8 w-8 text-primary" />
+              <img src={logo} alt="InterviewAI Logo" className="h-8 w-8" />
               <div className="absolute inset-0 blur-lg bg-primary/30" />
             </div>
             <span className="text-xl font-bold gradient-text">InterviewAI</span>
