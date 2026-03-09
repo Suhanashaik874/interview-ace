@@ -1,6 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Brain, LogOut, User, LayoutDashboard, FileText } from 'lucide-react';
+import { LogOut, User, LayoutDashboard, FileText } from 'lucide-react';
+import logo from '@/assets/logo.png';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
 import {
