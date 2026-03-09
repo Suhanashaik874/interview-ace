@@ -12,6 +12,7 @@ import InterviewSelect from "./pages/InterviewSelect";
 import Interview from "./pages/Interview";
 import HRInterview from "./pages/HRInterview";
 import InterviewResults from "./pages/InterviewResults";
+import ResetPassword from "./pages/ResetPassword";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -32,6 +33,7 @@ const App = () => (
             <Route path="/interview/:id" element={<Interview />} />
             <Route path="/interview/hr/:id" element={<HRInterview />} />
             <Route path="/interview/results/:id" element={<InterviewResults />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
