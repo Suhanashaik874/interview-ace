@@ -12,6 +12,7 @@ import InterviewSelect from "./pages/InterviewSelect";
 import Interview from "./pages/Interview";
 import HRInterview from "./pages/HRInterview";
 import InterviewResults from "./pages/InterviewResults";
+import ResetPassword from "./pages/ResetPassword";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
